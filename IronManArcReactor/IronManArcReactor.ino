@@ -1,9 +1,11 @@
 #include <TM1637Display.h>
 #include <Adafruit_NeoPixel.h>
 #include <NTPClient.h>
-#include <WiFiManager.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
+#include <ESPAsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <ElegantOTA.h>
 
 #define BLUE_LED_1_PIN D1
 #define BLUE_LED_2_PIN D2
@@ -13,8 +15,8 @@
 //======================================================================================================================================================================
 
 //========================CONFIGURATIONS================================================================================================================================
-const char *AP_SSID = "IRON_MAN_ARC";             // WiFi network that will appear at first launch or in case of saved network not found
-const char *AP_PASSWORD = "";                     // Password from the WiFi network
+const char *AP_SSID = "";                  // WiFi network that will appear at first launch or in case of saved network not found
+const char *AP_PASSWORD = "";           // Password from the WiFi network
 const char *HOSTNAME = "IRON_MAN_ARC";            // Hostname of the device that will be shown
 const char *NTP_POOL_ADDRESS = "ua.pool.ntp.org"; // choose at at https://www.ntppool.org/
 const long GMT_3_OFFSET_IN_SECONDS = 3600 * 3;    // Offset in seconds for GMT + 3
@@ -35,22 +37,39 @@ Adafruit_NeoPixel led_ring(PIXELS_COUNT_ON_RGB_LED, RGB_LED_PIN, NEO_GRB + NEO_K
 TM1637Display digits_display(DISPLAY_CLK, DISPLAY_DIO);
 WiFiUDP wifi_udp_client;
 NTPClient ntp_client(wifi_udp_client, NTP_POOL_ADDRESS, GMT_3_OFFSET_IN_SECONDS);
-WiFiManager wifiManager;
+AsyncWebServer server(80);
 
 void setupWiFi()
 {
-  wifiManager.setHostname(HOSTNAME);
-  wifiManager.setTimeout(180);
-  wifi_is_connected = wifiManager.autoConnect(AP_SSID, AP_PASSWORD);
-  if (!wifi_is_connected)
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(AP_SSID, AP_PASSWORD);
+  WiFi.hostname(HOSTNAME);
+  Serial.println("Connecting to wifi...");
+  while (WiFi.status() != WL_CONNECTED)
   {
-    Serial.println("failed to connect to wifi");
-    ESP.restart();
+    delay(500);
+    Serial.print(".");
   }
+  Serial.println("");
   if (MDNS.begin(HOSTNAME))
   {
     Serial.println("MDNS responder started");
   }
+}
+
+void setupWebServer()
+{
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
+            { request->send(200, "text/plain", "I'm online and running"); });
+
+  server.on("/reboot", HTTP_POST, [](AsyncWebServerRequest *request)
+            { 
+              request->send(200, "text/plain", "rebooting");
+              delay(500);
+              ESP.restart(); });
+
+  server.begin();
+  Serial.println("HTTP server started");
 }
 
 void setup()
@@ -58,26 +77,24 @@ void setup()
   Serial.begin(115200);
   Serial.println("");
   Serial.println("\n Starting");
-  digits_display.setBrightness(DISPLAY_BACKLIGHT_LEVEL);
-  showDigitsOnDisplay(88, 88, show_colon);
   setupWiFi();
   pinMode(BLUE_LED_1_PIN, OUTPUT);
   pinMode(BLUE_LED_2_PIN, OUTPUT);
+  ElegantOTA.begin(&server);
+
+  setupWebServer();
 
   ntp_client.begin();
   led_ring.begin();
   flash_cuckoo();
   blue_light(true);
+  digits_display.setBrightness(DISPLAY_BACKLIGHT_LEVEL);
+  showDigitsOnDisplay(88, 88, show_colon);
 }
 
 void loop()
 {
-  if (wifiManager.getWLStatusString() != "WL_CONNECTED")
-  {
-    delay(1000);
-    ESP.restart();
-  }
-
+  wifi_is_connected = WiFi.status() == WL_CONNECTED;
   if (secondChanged())
   {
     show_colon = !show_colon;
@@ -88,8 +105,20 @@ void loop()
   digitalWrite(BLUE_LED_1_PIN, 1);
   digitalWrite(BLUE_LED_2_PIN, 1);
 
-  // ToDo: Add OTA update
-  // ElegantOTA.loop();
+  if (!wifi_is_connected)
+  {
+    Serial.println("WiFi connection lost, trying to reconnect...");
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(AP_SSID, AP_PASSWORD);
+    WiFi.hostname(HOSTNAME);
+    wifi_is_connected = WiFi.status() == WL_CONNECTED;
+    if (wifi_is_connected)
+    {
+      Serial.println("WiFi connection repaired...");
+    }
+  }
+
+  ElegantOTA.loop();
   delay(1);
 }
 
@@ -155,6 +184,9 @@ bool secondChanged()
 
 void showTime()
 {
-  ntp_client.update();
+  if (wifi_is_connected)
+  {
+    ntp_client.update();
+  }
   showDigitsOnDisplay(ntp_client.getHours(), ntp_client.getMinutes(), show_colon);
 }

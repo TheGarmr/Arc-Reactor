@@ -15,3 +15,5 @@ The initial code and 3D model was done by [jeje95](https://www.thingiverse.com/j
 | D5            | DIO    |
 | D6            | SCL    |
 | GND           | GND    |
+
+LOLIN(WEMOS) D1 R2 & mini
